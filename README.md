@@ -175,3 +175,6 @@ En la interfaz: selecciona **Socket.IO** o **STOMP**, define `author` y `name`, 
 
 ## 📄 Licencia
 MIT (o la definida por el curso/equipo).
+
+# Documentacion del laboratorio
+[Documentation.md](Documentation.md)
