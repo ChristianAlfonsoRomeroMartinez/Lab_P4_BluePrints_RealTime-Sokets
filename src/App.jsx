@@ -16,7 +16,7 @@ export default function App() {
   const socketRef = useRef(null)
 
   useEffect(() => {
-    fetch(`${tech==='stomp'?API_BASE:IO_BASE}/api/blueprints/${author}/${name}`)
+    fetch(`${API_BASE}/api/v1/blueprints/${author}/${name}`)
       .then(r=>r.json())
       .then(drawAll)
   }, [tech, author, name])
