@@ -177,4 +177,4 @@ En la interfaz: selecciona **Socket.IO** o **STOMP**, define `author` y `name`, 
 MIT (o la definida por el curso/equipo).
 
 # Documentacion del laboratorio
-[Documentation.md](Documentation.md)
+**Documentation** https://github.com/ChristianAlfonsoRomeroMartinez/Lab_P4_BluePrints/blob/main/Documentation.md
