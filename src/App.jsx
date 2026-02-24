@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { createStompClient, subscribeBlueprint } from './lib/stompClient.js'
 import { createSocket } from './lib/socketIoClient.js'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080' // Spring
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8081' // REST API
+const STOMP_BASE = import.meta.env.VITE_STOMP_BASE ?? 'http://localhost:8080' // STOMP WebSocket
 const IO_BASE  = import.meta.env.VITE_IO_BASE  ?? 'http://localhost:3001' // Node/Socket.IO
 
 export default function App() {
   const [tech, setTech] = useState('stomp')
   const [author, setAuthor] = useState('juan')
   const [name, setName] = useState('plano-1')
+  const [error, setError] = useState(null)
   const canvasRef = useRef(null)
 
   const stompRef = useRef(null)
@@ -16,34 +18,100 @@ export default function App() {
   const socketRef = useRef(null)
 
   useEffect(() => {
-    fetch(`${tech==='stomp'?API_BASE:IO_BASE}/api/blueprints/${author}/${name}`)
-      .then(r=>r.json())
-      .then(drawAll)
+    setError(null)
+    fetch(`${API_BASE}/api/v1/blueprints/${author}/${name}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Error ${r.status}`)
+        return r.json()
+      })
+      .then(response => {
+        console.log('Respuesta del servidor:', response)
+        // Manejar estructura {code, message, data} o blueprint directo
+        const bp = response.data || response
+        console.log('Blueprint extraído:', bp)
+        drawAll(bp)
+      })
+      .catch(err => {
+        console.error('Error cargando blueprint:', err)
+        setError(`No se pudo cargar "${author}/${name}". Verifica que exista.`)
+      })
   }, [tech, author, name])
 
   function drawAll(bp) {
+    console.log('drawAll llamado con:', bp)
     const ctx = canvasRef.current?.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      console.warn('Canvas context no disponible')
+      return
+    }
     ctx.clearRect(0,0,600,400)
+    
+    if (!bp || !bp.points || !Array.isArray(bp.points) || bp.points.length === 0) {
+      console.log('Sin puntos para dibujar. bp:', bp, 'bp.points:', bp?.points)
+      return
+    }
+    
+    console.log(`Dibujando ${bp.points.length} puntos:`, bp.points)
+    
+    // Si solo hay 1 punto, dibujar un círculo
+    if (bp.points.length === 1) {
+      const p = bp.points[0]
+      ctx.fillStyle = '#333'
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
+      ctx.fill()
+      return
+    }
+    
+    // Dibujar líneas conectando puntos
     ctx.beginPath()
     bp.points.forEach((p,i)=> {
       if (i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y)
     })
+    ctx.strokeStyle = '#333'
+    ctx.lineWidth = 2
     ctx.stroke()
+    
+    // Dibujar círculos en cada punto
+    ctx.fillStyle = '#333'
+    bp.points.forEach(p => {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
+      ctx.fill()
+    })
   }
 
   useEffect(() => {
-    unsubRef.current?.(); unsubRef.current = null
-    stompRef.current?.deactivate?.(); stompRef.current = null
-    socketRef.current?.disconnect?.(); socketRef.current = null
+    // Cleanup previo
+    if (unsubRef.current) {
+      unsubRef.current.unsubscribe()
+      unsubRef.current = null
+    }
+    stompRef.current?.deactivate?.()
+    stompRef.current = null
+    socketRef.current?.disconnect?.()
+    socketRef.current = null
 
     if (tech === 'stomp') {
-      const client = createStompClient(API_BASE)
+      const client = createStompClient(STOMP_BASE)
       stompRef.current = client
       client.onConnect = () => {
+        console.log('STOMP conectado')
+        const topic = `/topic/blueprints.${author}.${name}`
+        console.log('Suscribiéndose al topic:', topic)
         unsubRef.current = subscribeBlueprint(client, author, name, (upd)=> {
-          drawAll({ points: upd.points })
+          console.log('Actualización STOMP RAW:', upd)
+          console.log('Tipo:', typeof upd, 'Keys:', Object.keys(upd))
+          // Manejar estructura {data} o blueprint directo
+          const bp = upd.data || upd
+          console.log('Blueprint extraído:', bp)
+          console.log('Puntos extraídos:', bp.points)
+          drawAll({ points: bp.points || [] })
         })
+        console.log('Suscripción exitosa al topic:', topic)
+      }
+      client.onStompError = (frame) => {
+        console.error('Error STOMP:', frame)
       }
       client.activate()
     } else {
@@ -51,10 +119,17 @@ export default function App() {
       socketRef.current = s
       const room = `blueprints.${author}.${name}`
       s.emit('join-room', room)
-      s.on('blueprint-update', (upd)=> drawAll({ points: upd.points }))
+      s.on('blueprint-update', (upd)=> {
+        console.log('Actualización Socket.IO:', upd)
+        const bp = upd.data || upd
+        drawAll({ points: bp.points || [] })
+      })
     }
     return () => {
-      unsubRef.current?.(); unsubRef.current = null
+      if (unsubRef.current) {
+        unsubRef.current.unsubscribe()
+        unsubRef.current = null
+      }
       stompRef.current?.deactivate?.()
       socketRef.current?.disconnect?.()
     }
@@ -63,12 +138,24 @@ export default function App() {
   function onClick(e) {
     const rect = e.target.getBoundingClientRect()
     const point = { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) }
+    console.log('Click en:', point)
 
     if (tech === 'stomp' && stompRef.current?.connected) {
-      stompRef.current.publish({ destination: '/app/draw', body: JSON.stringify({ author, name, point }) })
+      const payload = { author, name, point }
+      console.log('Enviando punto via STOMP')
+      console.log('   Destination: /app/draw')
+      console.log('   Payload:', payload)
+      stompRef.current.publish({ 
+        destination: '/app/draw', 
+        body: JSON.stringify(payload) 
+      })
     } else if (tech === 'socketio' && socketRef.current?.connected) {
+      console.log('Enviando punto via Socket.IO')
       const room = `blueprints.${author}.${name}`
       socketRef.current.emit('draw-event', { room, author, name, point })
+    } else {
+      console.warn('No hay conexión de tiempo real activa')
+      console.log('   tech:', tech, 'connected:', stompRef.current?.connected || socketRef.current?.connected)
     }
   }
 
@@ -84,6 +171,11 @@ export default function App() {
         <input value={author} onChange={e=>setAuthor(e.target.value)} placeholder="autor"/>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="plano"/>
       </div>
+      {error && (
+        <div style={{padding:12, marginBottom:12, background:'#fee', border:'1px solid #c00', borderRadius:8, color:'#c00'}}>
+          {error}
+        </div>
+      )}
       <canvas
         ref={canvasRef}
         width={600}
